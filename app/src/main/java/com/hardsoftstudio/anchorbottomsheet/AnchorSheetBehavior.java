@@ -173,10 +173,16 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
      */
     public AnchorSheetBehavior(Context context, AttributeSet attrs) {
         super(context, attrs);
-        TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.AnchorSheetBehavior_Params);
-        setPeekHeight(
-                a.getDimensionPixelSize(R.styleable.AnchorSheetBehavior_Params_peekHeight, 0));
-        setHideable(a.getBoolean(R.styleable.AnchorSheetBehavior_Params_hideable, false));
+        TypedArray a = context.obtainStyledAttributes(attrs,
+                android.support.design.R.styleable.BottomSheetBehavior_Layout);
+        TypedValue value = a.peekValue(android.support.design.R.styleable.BottomSheetBehavior_Layout_behavior_peekHeight);
+        if (value != null && value.data == PEEK_HEIGHT_AUTO) {
+            setPeekHeight(value.data);
+        } else {
+            setPeekHeight(a.getDimensionPixelSize(
+                    android.support.design.R.styleable.BottomSheetBehavior_Layout_behavior_peekHeight, PEEK_HEIGHT_AUTO));
+        }
+        setHideable(a.getBoolean(android.support.design.R.styleable.BottomSheetBehavior_Layout_behavior_hideable, false));
         a.recycle();
         ViewConfiguration configuration = ViewConfiguration.get(context);
         mMaximumVelocity = configuration.getScaledMaximumFlingVelocity();
