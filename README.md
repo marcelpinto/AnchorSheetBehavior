@@ -1,6 +1,6 @@
 # AnchorSheetBehavior
-[![Release](https://jitpack.io/v/User/Repo.svg)]
-(https://jitpack.io/#User/Repo)
+[![](https://jitpack.io/v/skimarxall/AnchorSheetBehavior.svg)](https://jitpack.io/#skimarxall/AnchorSheetBehavior)
+
 
 This repo contains an example of the modification of the BottomSheetBehavior with Anchor state.
 
