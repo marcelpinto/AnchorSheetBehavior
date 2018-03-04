@@ -1,8 +1,27 @@
 # AnchorSheetBehavior
+[![Release](https://jitpack.io/v/User/Repo.svg)]
+(https://jitpack.io/#User/Repo)
+
 This repo contains an example of the modification of the BottomSheetBehavior with Anchor state.
 
 Fine more about it at [the medium blog post](https://medium.com/@marxallski/from-bottomsheetbehavior-to-anchorsheetbehavior-262ad7997286#.m02n38t27).
-If you want to use it you can directly copy the [AnchorSheetBehavior](https://github.com/skimarxall/AnchorSheetBehavior/blob/master/app/src/main/java/com/hardsoftstudio/anchorbottomsheet/AnchorSheetBehavior.java) 
+
+# Integration 
+
+```groovy
+allprojects {
+    repositories {
+        ...
+        maven { url 'https://jitpack.io' }
+    }
+}
+```
+Add OkSse dependency:
+```groovy
+dependencies {
+    compile 'com.github.skimarxall:AnchorSheetBehavior:master-SNAPSHOT'
+}
+```
 
 ![](anchorsheetbehavior_demo.gif.gif)
 

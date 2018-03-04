@@ -10,8 +10,6 @@
 # Reference: https://intellij-support.jetbrains.com/hc/en-us/articles/206544839
 
 # User-specific stuff:
-/gradlew
-/gradlew.bat
 .idea/workspace.xml
 .idea/tasks.xml
 .idea/dictionaries
@@ -81,7 +79,6 @@ gen/
 out/
 
 # Gradle files
-.gradle/
 build/
 
 # Local configuration file (sdk path, etc)
