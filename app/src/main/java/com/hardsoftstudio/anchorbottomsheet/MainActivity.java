@@ -6,6 +6,8 @@ import android.support.v7.app.AppCompatActivity;
 import android.view.View;
 import android.widget.TextView;
 
+import com.hardsoftstudio.widget.AnchorSheetBehavior;
+
 public class MainActivity extends AppCompatActivity {
 
     private AnchorSheetBehavior<View> anchorBehavior;
@@ -16,7 +18,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        content = (TextView) findViewById(R.id.panel_content);
+        content = findViewById(R.id.panel_content);
 
         anchorBehavior = AnchorSheetBehavior.from(findViewById(R.id.anchor_panel));
         anchorBehavior.setHideable(true);
@@ -50,12 +52,13 @@ public class MainActivity extends AppCompatActivity {
                 anchorBehavior.setState(AnchorSheetBehavior.STATE_EXPANDED);
                 break;
             case AnchorSheetBehavior.STATE_COLLAPSED:
-                anchorBehavior.setHideable(true);
-                anchorBehavior.setState(AnchorSheetBehavior.STATE_HIDDEN);
+                anchorBehavior.setState(AnchorSheetBehavior.STATE_ANCHOR);
                 break;
             case AnchorSheetBehavior.STATE_HIDDEN:
                 anchorBehavior.setState(AnchorSheetBehavior.STATE_COLLAPSED);
-                anchorBehavior.setHideable(false);
+                break;
+            case AnchorSheetBehavior.STATE_EXPANDED:
+                anchorBehavior.setState(AnchorSheetBehavior.STATE_ANCHOR);
                 break;
             default:
                 break;

@@ -1,16 +1,17 @@
-apply plugin: 'com.android.application'
+apply plugin: 'com.android.library'
 
 android {
     compileSdkVersion 26
-    buildToolsVersion "26.0.2"
 
     defaultConfig {
-        applicationId "com.hardsoftstudio.anchorbottomsheet"
         minSdkVersion 16
         targetSdkVersion 26
         versionCode 1
         versionName "1.0"
+
+        testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
     }
+
     buildTypes {
         release {
             minifyEnabled false
@@ -20,6 +21,5 @@ android {
 }
 
 dependencies {
-    implementation project(':library')
-    implementation 'com.android.support:appcompat-v7:26.1.0'
+    api 'com.android.support:design:26.1.0'
 }

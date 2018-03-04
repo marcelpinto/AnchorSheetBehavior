@@ -1,13 +1,11 @@
-package com.hardsoftstudio.anchorbottomsheet;
-
 /*
- * Copyright (C) 2015 The Android Open Source Project
+ * Copyright (c) 2016 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,33 +14,45 @@ package com.hardsoftstudio.anchorbottomsheet;
  * limitations under the License.
  */
 
+package com.hardsoftstudio.widget;
+
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.support.annotation.IntDef;
 import android.support.annotation.NonNull;
+import android.support.annotation.VisibleForTesting;
 import android.support.design.widget.CoordinatorLayout;
-import android.support.v4.view.MotionEventCompat;
-import android.support.v4.view.NestedScrollingChild;
-import android.support.v4.view.VelocityTrackerCompat;
-import android.support.v4.view.ViewCompat;
+import android.support.v4.math.MathUtils;
+import android.support.v4.view.AbsSavedState;
 import android.support.v4.widget.ViewDragHelper;
 import android.util.AttributeSet;
+import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.ref.WeakReference;
 
+import static android.support.v4.view.ViewCompat.NestedScrollType;
+import static android.support.v4.view.ViewCompat.SCROLL_AXIS_VERTICAL;
+import static android.support.v4.view.ViewCompat.ScrollAxis;
+import static android.support.v4.view.ViewCompat.getFitsSystemWindows;
+import static android.support.v4.view.ViewCompat.isAttachedToWindow;
+import static android.support.v4.view.ViewCompat.isNestedScrollingEnabled;
+import static android.support.v4.view.ViewCompat.offsetTopAndBottom;
+import static android.support.v4.view.ViewCompat.postOnAnimation;
+
 /**
  * An interaction behavior plugin for a child view of {@link CoordinatorLayout} to make it work as
  * a bottom sheet.
- *
+ * <p>
  * Modification of the {@link android.support.design.widget.BottomSheetBehavior} with an Anchor state.
  */
 public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behavior<V> {
@@ -66,8 +76,10 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
          * Called when the bottom sheet is being dragged.
          *
          * @param bottomSheet The bottom sheet view.
-         * @param slideOffset The new offset of this bottom sheet within its range, from 0 to 1
-         *                    when it is moving upward, and from 0 to -1 when it moving downward.
+         * @param slideOffset The new offset of this bottom sheet within [-1,1] range. Offset
+         *                    increases as this bottom sheet is moving upward. From 0 to 1 the sheet
+         *                    is between collapsed and expanded states and from -1 to 0 it is
+         *                    between hidden and collapsed states.
          */
         public abstract void onSlide(@NonNull View bottomSheet, float slideOffset);
     }
@@ -103,24 +115,49 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
     public static final int STATE_ANCHOR = 6;
 
     /**
+     * The bottom sheet is forced to be hidden programmatically.
+     */
+    public static final int STATE_FORCE_HIDDEN = 7;
+
+    /**
      * @hide
      */
-    @IntDef({STATE_EXPANDED, STATE_COLLAPSED, STATE_DRAGGING, STATE_SETTLING, STATE_HIDDEN, STATE_ANCHOR})
+    @IntDef({
+            STATE_EXPANDED,
+            STATE_COLLAPSED,
+            STATE_DRAGGING,
+            STATE_SETTLING,
+            STATE_HIDDEN,
+            STATE_ANCHOR,
+            STATE_FORCE_HIDDEN
+    })
     @Retention(RetentionPolicy.SOURCE)
     public @interface State {
     }
+
+    /**
+     * Peek at the 16:9 ratio keyline of its parent.
+     * <p>
+     * <p>This can be used as a parameter for {@link #setPeekHeight(int)}.
+     * {@link #getPeekHeight()} will return this when the value is set.</p>
+     */
+    public static final int PEEK_HEIGHT_AUTO = -1;
 
     private static final float HIDE_THRESHOLD = 0.5f;
 
     private static final float HIDE_FRICTION = 0.1f;
 
-    private static final float ANCHOR_THRESHOLD = 0.25f;
+    private static final float ANCHOR_THRESHOLD = 0.50f;
 
     private float mAnchorThreshold = ANCHOR_THRESHOLD;
 
     private float mMaximumVelocity;
 
     private int mPeekHeight;
+
+    private boolean mPeekHeightAuto;
+
+    private int mPeekHeightMin;
 
     private int mMinOffset;
 
@@ -130,7 +167,7 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
 
     private boolean mHideable;
 
-    private boolean isEnabled = true;
+    private boolean mSkipCollapsed;
 
     @State
     private int mState = STATE_COLLAPSED;
@@ -175,14 +212,20 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
         super(context, attrs);
         TypedArray a = context.obtainStyledAttributes(attrs,
                 android.support.design.R.styleable.BottomSheetBehavior_Layout);
-        TypedValue value = a.peekValue(android.support.design.R.styleable.BottomSheetBehavior_Layout_behavior_peekHeight);
+        TypedValue value = a.peekValue(
+                android.support.design.R.styleable.BottomSheetBehavior_Layout_behavior_peekHeight);
         if (value != null && value.data == PEEK_HEIGHT_AUTO) {
             setPeekHeight(value.data);
         } else {
             setPeekHeight(a.getDimensionPixelSize(
-                    android.support.design.R.styleable.BottomSheetBehavior_Layout_behavior_peekHeight, PEEK_HEIGHT_AUTO));
+                    android.support.design.R.styleable.BottomSheetBehavior_Layout_behavior_peekHeight,
+                    PEEK_HEIGHT_AUTO
+            ));
         }
-        setHideable(a.getBoolean(android.support.design.R.styleable.BottomSheetBehavior_Layout_behavior_hideable, false));
+        setHideable(a.getBoolean(
+                android.support.design.R.styleable.BottomSheetBehavior_Layout_behavior_hideable, false));
+        setSkipCollapsed(a.getBoolean(
+                android.support.design.R.styleable.BottomSheetBehavior_Layout_behavior_skipCollapsed, false));
         a.recycle();
         ViewConfiguration configuration = ViewConfiguration.get(context);
         mMaximumVelocity = configuration.getScaledMaximumFlingVelocity();
@@ -207,26 +250,37 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
 
     @Override
     public boolean onLayoutChild(CoordinatorLayout parent, V child, int layoutDirection) {
-        // First let the parent lay it out
-        if (mState != STATE_DRAGGING && mState != STATE_SETTLING) {
-            if (ViewCompat.getFitsSystemWindows(parent) && !ViewCompat.getFitsSystemWindows(child)) {
-                ViewCompat.setFitsSystemWindows(child, true);
-            }
-            parent.onLayoutChild(child, layoutDirection);
+        if (getFitsSystemWindows(parent) && !getFitsSystemWindows(child)) {
+            child.setFitsSystemWindows(true);
         }
+        int savedTop = child.getTop();
+        // First let the parent lay it out
+        parent.onLayoutChild(child, layoutDirection);
         // Offset the bottom sheet
         mParentHeight = parent.getHeight();
+        int peekHeight;
+        if (mPeekHeightAuto) {
+            if (mPeekHeightMin == 0) {
+                mPeekHeightMin = parent.getResources().getDimensionPixelSize(
+                        android.support.design.R.dimen.design_bottom_sheet_peek_height_min);
+            }
+            peekHeight = Math.max(mPeekHeightMin, mParentHeight - parent.getWidth() * 9 / 16);
+        } else {
+            peekHeight = mPeekHeight;
+        }
         mMinOffset = Math.max(0, mParentHeight - child.getHeight());
-        mMaxOffset = Math.max(mParentHeight - mPeekHeight, mMinOffset);
+        mMaxOffset = Math.max(mParentHeight - peekHeight, mMinOffset);
         mAnchorOffset = (int) Math.max(mParentHeight * mAnchorThreshold, mMinOffset);
         if (mState == STATE_EXPANDED) {
-            ViewCompat.offsetTopAndBottom(child, mMinOffset);
+            offsetTopAndBottom(child, mMinOffset);
         } else if (mState == STATE_ANCHOR) {
-            ViewCompat.offsetTopAndBottom(child, mAnchorOffset);
-        } else if (mHideable && mState == STATE_HIDDEN) {
-            ViewCompat.offsetTopAndBottom(child, mParentHeight);
+            offsetTopAndBottom(child, mAnchorOffset);
+        } else if ((mHideable && mState == STATE_HIDDEN) || mState == STATE_FORCE_HIDDEN) {
+            offsetTopAndBottom(child, mParentHeight);
         } else if (mState == STATE_COLLAPSED) {
-            ViewCompat.offsetTopAndBottom(child, mMaxOffset);
+            offsetTopAndBottom(child, mMaxOffset);
+        } else if (mState == STATE_DRAGGING || mState == STATE_SETTLING) {
+            offsetTopAndBottom(child, savedTop - child.getTop());
         }
         if (mViewDragHelper == null) {
             mViewDragHelper = ViewDragHelper.create(parent, mDragCallback);
@@ -238,10 +292,11 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
 
     @Override
     public boolean onInterceptTouchEvent(CoordinatorLayout parent, V child, MotionEvent event) {
-        if (!child.isShown() || !isEnabled) {
+        if (!child.isShown()) {
+            mIgnoreEvents = true;
             return false;
         }
-        int action = MotionEventCompat.getActionMasked(event);
+        int action = event.getActionMasked();
         // Record the velocity
         if (action == MotionEvent.ACTION_DOWN) {
             reset();
@@ -264,14 +319,14 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
             case MotionEvent.ACTION_DOWN:
                 int initialX = (int) event.getX();
                 mInitialY = (int) event.getY();
-                View scroll = mNestedScrollingChildRef.get();
+                View scroll = mNestedScrollingChildRef != null
+                        ? mNestedScrollingChildRef.get() : null;
                 if (scroll != null && parent.isPointInChildBounds(scroll, initialX, mInitialY)) {
                     mActivePointerId = event.getPointerId(event.getActionIndex());
                     mTouchingScrollingChild = true;
                 }
-                mIgnoreEvents =
-                        mActivePointerId == MotionEvent.INVALID_POINTER_ID && !parent.isPointInChildBounds(child, initialX,
-                                                                                                           mInitialY);
+                mIgnoreEvents = mActivePointerId == MotionEvent.INVALID_POINTER_ID &&
+                        !parent.isPointInChildBounds(child, initialX, mInitialY);
                 break;
         }
         if (!mIgnoreEvents && mViewDragHelper.shouldInterceptTouchEvent(event)) {
@@ -292,7 +347,7 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
         if (!child.isShown()) {
             return false;
         }
-        int action = MotionEventCompat.getActionMasked(event);
+        int action = event.getActionMasked();
         if (mState == STATE_DRAGGING && action == MotionEvent.ACTION_DOWN) {
             return true;
         }
@@ -312,20 +367,29 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
                 mViewDragHelper.captureChildView(child, event.getPointerId(event.getActionIndex()));
             }
         }
-        return true;
+        return !mIgnoreEvents;
     }
 
     @Override
-    public boolean onStartNestedScroll(CoordinatorLayout coordinatorLayout, V child, View directTargetChild, View target,
-                                       int nestedScrollAxes) {
+    public boolean onStartNestedScroll(@NonNull CoordinatorLayout coordinatorLayout,
+                                       @NonNull V child,
+                                       @NonNull View directTargetChild,
+                                       @NonNull View target,
+                                       @ScrollAxis int nestedScrollAxes,
+                                       @NestedScrollType int type) {
         mLastNestedScrollDy = 0;
         mNestedScrolled = false;
-        return (nestedScrollAxes & ViewCompat.SCROLL_AXIS_VERTICAL) != 0;
+        return (nestedScrollAxes & SCROLL_AXIS_VERTICAL) != 0;
     }
 
     @Override
-    public void onNestedPreScroll(CoordinatorLayout coordinatorLayout, V child, View target, int dx, int dy,
-                                  int[] consumed) {
+    public void onNestedPreScroll(@NonNull CoordinatorLayout coordinatorLayout,
+                                  @NonNull V child,
+                                  @NonNull View target,
+                                  int dx,
+                                  int dy,
+                                  @NonNull int[] consumed,
+                                  @NestedScrollType int type) {
         View scrollingChild = mNestedScrollingChildRef.get();
         if (target != scrollingChild) {
             return;
@@ -335,22 +399,22 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
         if (dy > 0) { // Upward
             if (newTop < mMinOffset) {
                 consumed[1] = currentTop - mMinOffset;
-                ViewCompat.offsetTopAndBottom(child, -consumed[1]);
+                offsetTopAndBottom(child, -consumed[1]);
                 setStateInternal(STATE_EXPANDED);
             } else {
                 consumed[1] = dy;
-                ViewCompat.offsetTopAndBottom(child, -dy);
+                offsetTopAndBottom(child, -dy);
                 setStateInternal(STATE_DRAGGING);
             }
         } else if (dy < 0) { // Downward
-            if (!ViewCompat.canScrollVertically(target, -1)) {
+            if (!target.canScrollVertically(-1)) {
                 if (newTop <= mMaxOffset || mHideable) {
                     consumed[1] = dy;
-                    ViewCompat.offsetTopAndBottom(child, -dy);
+                    offsetTopAndBottom(child, -dy);
                     setStateInternal(STATE_DRAGGING);
                 } else {
                     consumed[1] = currentTop - mMaxOffset;
-                    ViewCompat.offsetTopAndBottom(child, -consumed[1]);
+                    offsetTopAndBottom(child, -consumed[1]);
                     setStateInternal(STATE_COLLAPSED);
                 }
             }
@@ -361,20 +425,33 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
     }
 
     @Override
-    public void onStopNestedScroll(CoordinatorLayout coordinatorLayout, V child, View target) {
+    public void onStopNestedScroll(@NonNull CoordinatorLayout coordinatorLayout,
+                                   @NonNull V child,
+                                   @NonNull View target,
+                                   @NestedScrollType int type) {
         if (child.getTop() == mMinOffset) {
             setStateInternal(STATE_EXPANDED);
             return;
         }
-        if (target != mNestedScrollingChildRef.get() || !mNestedScrolled) {
+        if (mNestedScrollingChildRef == null || target != mNestedScrollingChildRef.get()
+                || !mNestedScrolled) {
             return;
         }
         int top;
         int targetState;
-        if (mHideable && shouldHide(child, getYVelocity())) {
+        if (mLastNestedScrollDy > 0) {
+            int currentTop = child.getTop();
+            if (Math.abs(currentTop - mMinOffset) < Math.abs(currentTop - mAnchorOffset)) {
+                top = mMinOffset;
+                targetState = STATE_EXPANDED;
+            } else {
+                top = mAnchorOffset;
+                targetState = STATE_ANCHOR;
+            }
+        } else if (mHideable && shouldHide(child, getYVelocity())) {
             top = mParentHeight;
             targetState = STATE_HIDDEN;
-        } else if (mLastNestedScrollDy >= 0) {
+        } else if (mLastNestedScrollDy == 0) {
             int currentTop = child.getTop();
             if (Math.abs(currentTop - mAnchorOffset) < Math.abs(currentTop - mMinOffset)) {
                 top = mAnchorOffset;
@@ -387,12 +464,18 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
                 targetState = STATE_COLLAPSED;
             }
         } else {
-            top = mMaxOffset;
-            targetState = STATE_COLLAPSED;
+            int currentTop = child.getTop();
+            if (Math.abs(currentTop - mAnchorOffset) < Math.abs(currentTop - mMaxOffset)) {
+                top = mAnchorOffset;
+                targetState = STATE_ANCHOR;
+            } else {
+                top = mMaxOffset;
+                targetState = STATE_COLLAPSED;
+            }
         }
         if (mViewDragHelper.smoothSlideViewTo(child, child.getLeft(), top)) {
             setStateInternal(STATE_SETTLING);
-            ViewCompat.postOnAnimation(child, new SettleRunnable(child, targetState));
+            postOnAnimation(child, new SettleRunnable(child, targetState));
         } else {
             setStateInternal(targetState);
         }
@@ -400,10 +483,15 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
     }
 
     @Override
-    public boolean onNestedPreFling(CoordinatorLayout coordinatorLayout, V child, View target, float velocityX,
+    public boolean onNestedPreFling(@NonNull CoordinatorLayout coordinatorLayout,
+                                    @NonNull V child,
+                                    @NonNull View target,
+                                    float velocityX,
                                     float velocityY) {
-        return target == mNestedScrollingChildRef.get() && (mState != STATE_EXPANDED || super.onNestedPreFling(
-                coordinatorLayout, child, target, velocityX, velocityY));
+        return target == mNestedScrollingChildRef.get() &&
+                (mState != STATE_EXPANDED ||
+                        super.onNestedPreFling(coordinatorLayout, child, target,
+                                velocityX, velocityY));
     }
 
     /**
@@ -413,74 +501,42 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
      * @attr ref android.support.design.R.styleable#AnchorBehavior_Params_behavior_peekHeight
      */
     public final void setPeekHeight(int peekHeight) {
-        mPeekHeight = Math.max(0, peekHeight);
-        mMaxOffset = mParentHeight - peekHeight;
+        boolean layout = false;
+        if (peekHeight == PEEK_HEIGHT_AUTO) {
+            if (!mPeekHeightAuto) {
+                mPeekHeightAuto = true;
+                layout = true;
+            }
+        } else if (mPeekHeightAuto || mPeekHeight != peekHeight) {
+            mPeekHeightAuto = false;
+            mPeekHeight = Math.max(0, peekHeight);
+            mMaxOffset = mParentHeight - peekHeight;
+            layout = true;
+        }
+        if (layout && mState == STATE_COLLAPSED && mViewRef != null) {
+            V view = mViewRef.get();
+            if (view != null) {
+                view.requestLayout();
+            }
+        }
     }
 
     /**
      * Gets the height of the bottom sheet when it is collapsed.
      *
-     * @return The height of the collapsed bottom sheet.
-     * @attr ref android.support.design.R.styleable#AnchorBehavior_Params_behavior_peekHeight
+     * @return The height of the collapsed bottom sheet in pixels, or {@link #PEEK_HEIGHT_AUTO}
+     *         if the sheet is configured to peek automatically at 16:9 ratio keyline
+     * @attr ref android.support.design.R.styleable#BottomSheetBehavior_Layout_behavior_peekHeight
      */
     public final int getPeekHeight() {
-        return mPeekHeight;
-    }
-
-    /**
-     * Gets the offset from the panel till the top
-     *
-     * @return the offset in pixel size
-     */
-    public final int getPanelOffset() {
-        if (mState == STATE_EXPANDED) {
-            return mMinOffset;
-        } else if (mState == STATE_ANCHOR) {
-            return mAnchorOffset;
-        } else if (mHideable && mState == STATE_HIDDEN) {
-            return mParentHeight;
-        }
-        return mMaxOffset;
-    }
-
-    /**
-     * Get the size in pixels from the anchor state to the top of the parent (Expanded state)
-     *
-     * @return pixel size of the anchor state
-     */
-    public int getAnchorOffset() {
-        return mAnchorOffset;
-    }
-
-    /**
-     * The multiplier between 0..1 to calculate the Anchor offset
-     *
-     * @return float between 0..1
-     */
-    public float getAnchorThreshold() {
-        return mAnchorThreshold;
-    }
-
-    /**
-     * Set the offset for the anchor state. Number between 0..1
-     * i.e: Anchor the panel at 1/3 of the screen: setAnchorOffset(0.25)
-     *
-     * @param threshold {@link Float} from 0..1
-     */
-    public void setAnchorOffset(float threshold) {
-        this.mAnchorThreshold = threshold;
-        this.mAnchorOffset = (int) Math.max(mParentHeight * mAnchorThreshold, mMinOffset);
-    }
-
-    public void setEnabled(boolean enabled) {
-        this.isEnabled = enabled;
+        return mPeekHeightAuto ? PEEK_HEIGHT_AUTO : mPeekHeight;
     }
 
     /**
      * Sets whether this bottom sheet can hide when it is swiped down.
      *
      * @param hideable {@code true} to make this bottom sheet hideable.
-     * @attr ref android.support.design.R.styleable#AnchorBehavior_Params_behavior_hideable
+     * @attr ref android.support.design.R.styleable#BottomSheetBehavior_Layout_behavior_hideable
      */
     public void setHideable(boolean hideable) {
         mHideable = hideable;
@@ -494,6 +550,28 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
      */
     public boolean isHideable() {
         return mHideable;
+    }
+
+    /**
+     * Sets whether this bottom sheet should skip the collapsed state when it is being hidden
+     * after it is expanded once. Setting this to true has no effect unless the sheet is hideable.
+     *
+     * @param skipCollapsed True if the bottom sheet should skip the collapsed state.
+     * @attr ref android.support.design.R.styleable#BottomSheetBehavior_Layout_behavior_skipCollapsed
+     */
+    public void setSkipCollapsed(boolean skipCollapsed) {
+        mSkipCollapsed = skipCollapsed;
+    }
+
+    /**
+     * Sets whether this bottom sheet should skip the collapsed state when it is being hidden
+     * after it is expanded once.
+     *
+     * @return Whether the bottom sheet should skip the collapsed state.
+     * @attr ref android.support.design.R.styleable#BottomSheetBehavior_Layout_behavior_skipCollapsed
+     */
+    public boolean getSkipCollapsed() {
+        return mSkipCollapsed;
     }
 
     /**
@@ -512,41 +590,33 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
      * @param state One of {@link #STATE_COLLAPSED}, {@link #STATE_EXPANDED}, or
      *              {@link #STATE_HIDDEN}.
      */
-    public final void setState(@State int state) {
+    public final void setState(@State final int state) {
         if (state == mState) {
             return;
         }
         if (mViewRef == null) {
             // The view is not laid out yet; modify mState and let onLayoutChild handle it later
             if (state == STATE_COLLAPSED || state == STATE_EXPANDED || state == STATE_ANCHOR ||
-                    (mHideable && state == STATE_HIDDEN)) {
+                    ((mHideable && state == STATE_HIDDEN) || state == STATE_FORCE_HIDDEN)) {
                 mState = state;
             }
             return;
         }
-        V child = mViewRef.get();
+        final V child = mViewRef.get();
         if (child == null) {
             return;
         }
-        int top;
-        if (state == STATE_COLLAPSED) {
-            top = mMaxOffset;
-            View scroll = mNestedScrollingChildRef.get();
-            if (scroll != null && ViewCompat.canScrollVertically(scroll, -1)) {
-                scroll.scrollTo(0, 0);
-            }
-        } else if (state == STATE_EXPANDED) {
-            top = mMinOffset;
-        } else if (state == STATE_ANCHOR) {
-            top = mAnchorOffset;
-        } else if (mHideable && state == STATE_HIDDEN) {
-            top = mParentHeight;
+        // Start the animation; wait until a pending layout if there is one.
+        ViewParent parent = child.getParent();
+        if (parent != null && parent.isLayoutRequested() && isAttachedToWindow(child)) {
+            child.post(new Runnable() {
+                @Override
+                public void run() {
+                    startSettlingAnimation(child, state);
+                }
+            });
         } else {
-            throw new IllegalArgumentException("Illegal state argument: " + state);
-        }
-        setStateInternal(STATE_SETTLING);
-        if (mViewDragHelper.smoothSlideViewTo(child, child.getLeft(), top)) {
-            ViewCompat.postOnAnimation(child, new SettleRunnable(child, state));
+            startSettlingAnimation(child, state);
         }
     }
 
@@ -580,7 +650,10 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
         }
     }
 
-    private boolean shouldHide(View child, float yvel) {
+    boolean shouldHide(View child, float yvel) {
+        if (mSkipCollapsed) {
+            return true;
+        }
         if (child.getTop() < mMaxOffset) {
             // It should not hide, but collapse.
             return false;
@@ -589,8 +662,9 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
         return Math.abs(newTop - mMaxOffset) / (float) mPeekHeight > HIDE_THRESHOLD;
     }
 
-    private View findScrollingChild(View view) {
-        if (view instanceof NestedScrollingChild) {
+    @VisibleForTesting
+    View findScrollingChild(View view) {
+        if (isNestedScrollingEnabled(view)) {
             return view;
         }
         if (view instanceof ViewGroup) {
@@ -607,7 +681,28 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
 
     private float getYVelocity() {
         mVelocityTracker.computeCurrentVelocity(1000, mMaximumVelocity);
-        return VelocityTrackerCompat.getYVelocity(mVelocityTracker, mActivePointerId);
+        return mVelocityTracker.getYVelocity(mActivePointerId);
+    }
+
+    void startSettlingAnimation(View child, int state) {
+        int top;
+        if (state == STATE_ANCHOR) {
+            top = mAnchorOffset;
+        } else if (state == STATE_COLLAPSED) {
+            top = mMaxOffset;
+        } else if (state == STATE_EXPANDED) {
+            top = mMinOffset;
+        } else if ((mHideable && state == STATE_HIDDEN) || state == STATE_FORCE_HIDDEN) {
+            top = mParentHeight;
+        } else {
+            throw new IllegalArgumentException("Illegal state argument: " + state);
+        }
+        if (mViewDragHelper.smoothSlideViewTo(child, child.getLeft(), top)) {
+            setStateInternal(STATE_SETTLING);
+            postOnAnimation(child, new SettleRunnable(child, state));
+        } else {
+            setStateInternal(state);
+        }
     }
 
     private final ViewDragHelper.Callback mDragCallback = new ViewDragHelper.Callback() {
@@ -622,7 +717,7 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
             }
             if (mState == STATE_EXPANDED && mActivePointerId == pointerId) {
                 View scroll = mNestedScrollingChildRef.get();
-                if (scroll != null && ViewCompat.canScrollVertically(scroll, -1)) {
+                if (scroll != null && scroll.canScrollVertically(-1)) {
                     // Let the content scroll up
                     return false;
                 }
@@ -646,17 +741,26 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
         public void onViewReleased(View releasedChild, float xvel, float yvel) {
             int top;
             @State int targetState;
-            if (mHideable && shouldHide(releasedChild, yvel)) {
-                top = mParentHeight;
-                targetState = STATE_HIDDEN;
-            } else if (yvel <= 0.f) {
+            if (yvel < 0) { // Moving up
                 int currentTop = releasedChild.getTop();
-                if (Math.abs(currentTop - mAnchorOffset) < Math.abs(currentTop - mMinOffset)) {
-                    top = mAnchorOffset;
-                    targetState = STATE_ANCHOR;
-                } else if (Math.abs(currentTop - mMinOffset) < Math.abs(currentTop - mMaxOffset)) {
+                if (Math.abs(currentTop - mMinOffset) < Math.abs(currentTop - mAnchorOffset)) {
                     top = mMinOffset;
                     targetState = STATE_EXPANDED;
+                } else {
+                    top = mAnchorOffset;
+                    targetState = STATE_ANCHOR;
+                }
+            } else if (mHideable && shouldHide(releasedChild, yvel)) {
+                top = mParentHeight;
+                targetState = STATE_HIDDEN;
+            } else if (yvel == 0.f) {
+                int currentTop = releasedChild.getTop();
+                if (Math.abs(currentTop - mMinOffset) < Math.abs(currentTop - mAnchorOffset)) {
+                    top = mMinOffset;
+                    targetState = STATE_EXPANDED;
+                } else if (Math.abs(currentTop - mAnchorOffset) < Math.abs(currentTop - mMaxOffset)) {
+                    top = mAnchorOffset;
+                    targetState = STATE_ANCHOR;
                 } else {
                     top = mMaxOffset;
                     targetState = STATE_COLLAPSED;
@@ -667,7 +771,8 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
             }
             if (mViewDragHelper.settleCapturedViewAt(releasedChild.getLeft(), top)) {
                 setStateInternal(STATE_SETTLING);
-                ViewCompat.postOnAnimation(releasedChild, new SettleRunnable(releasedChild, targetState));
+                postOnAnimation(releasedChild,
+                        new SettleRunnable(releasedChild, targetState));
             } else {
                 setStateInternal(targetState);
             }
@@ -675,7 +780,7 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
 
         @Override
         public int clampViewPositionVertical(View child, int top, int dy) {
-            return MathUtils.constrain(top, mMinOffset, mHideable ? mParentHeight : mMaxOffset);
+            return MathUtils.clamp(top, mMinOffset, mHideable ? mParentHeight : mMaxOffset);
         }
 
         @Override
@@ -693,15 +798,22 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
         }
     };
 
-    private void dispatchOnSlide(int top) {
+    void dispatchOnSlide(int top) {
         View bottomSheet = mViewRef.get();
         if (bottomSheet != null && mCallback != null) {
             if (top > mMaxOffset) {
-                mCallback.onSlide(bottomSheet, (float) (mMaxOffset - top) / mPeekHeight);
+                mCallback.onSlide(bottomSheet, (float) (mMaxOffset - top) /
+                        (mParentHeight - mMaxOffset));
             } else {
-                mCallback.onSlide(bottomSheet, (float) (mMaxOffset - top) / ((mMaxOffset - mMinOffset)));
+                mCallback.onSlide(bottomSheet,
+                        (float) (mMaxOffset - top) / ((mMaxOffset - mMinOffset)));
             }
         }
+    }
+
+    @VisibleForTesting
+    int getPeekHeightMin() {
+        return mPeekHeightMin;
     }
 
     private class SettleRunnable implements Runnable {
@@ -719,20 +831,23 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
         @Override
         public void run() {
             if (mViewDragHelper != null && mViewDragHelper.continueSettling(true)) {
-                ViewCompat.postOnAnimation(mView, this);
+                postOnAnimation(mView, this);
             } else {
                 setStateInternal(mTargetState);
             }
         }
     }
 
-    protected static class SavedState extends View.BaseSavedState {
-
+    protected static class SavedState extends AbsSavedState {
         @State
         final int state;
 
         public SavedState(Parcel source) {
-            super(source);
+            this(source, null);
+        }
+
+        public SavedState(Parcel source, ClassLoader loader) {
+            super(source, loader);
             //noinspection ResourceType
             state = source.readInt();
         }
@@ -748,10 +863,15 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
             out.writeInt(state);
         }
 
-        public static final Creator<SavedState> CREATOR = new Creator<SavedState>() {
+        public static final Creator<SavedState> CREATOR = new ClassLoaderCreator<SavedState>() {
             @Override
-            public SavedState createFromParcel(Parcel source) {
-                return new SavedState(source);
+            public SavedState createFromParcel(Parcel in, ClassLoader loader) {
+                return new SavedState(in, loader);
+            }
+
+            @Override
+            public SavedState createFromParcel(Parcel in) {
+                return new SavedState(in, null);
             }
 
             @Override
@@ -778,16 +898,5 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
             throw new IllegalArgumentException("The view is not associated with AnchorSheetBehavior");
         }
         return (AnchorSheetBehavior<V>) behavior;
-    }
-
-    static class MathUtils {
-
-        static int constrain(int amount, int low, int high) {
-            return amount < low ? low : (amount > high ? high : amount);
-        }
-
-        static float constrain(float amount, float low, float high) {
-            return amount < low ? low : (amount > high ? high : amount);
-        }
     }
 }

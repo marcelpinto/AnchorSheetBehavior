@@ -18,8 +18,8 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@color/colorPrimaryDark"
-        app:layout_behavior="com.hardsoftstudio.anchorbottomsheet.AnchorSheetBehavior"
-        app:peekHeight="@dimen/panel_content_height">
+        app:layout_behavior="com.hardsoftstudio.widget.AnchorSheetBehavior"
+        app:behavior_peekHeight="@dimen/panel_content_height">
 
         <TextView
             android:id="@+id/panel_content"
