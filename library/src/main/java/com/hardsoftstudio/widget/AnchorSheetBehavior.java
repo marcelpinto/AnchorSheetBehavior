@@ -344,7 +344,7 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
 
     @Override
     public boolean onTouchEvent(CoordinatorLayout parent, V child, MotionEvent event) {
-        if (!child.isShown()) {
+        if (!child.isShown() || mViewDragHelper == null) {
             return false;
         }
         int action = event.getActionMasked();
@@ -530,6 +530,51 @@ public class AnchorSheetBehavior<V extends View> extends CoordinatorLayout.Behav
      */
     public final int getPeekHeight() {
         return mPeekHeightAuto ? PEEK_HEIGHT_AUTO : mPeekHeight;
+    }
+
+    /**
+     * Gets the offset from the panel till the top
+     *
+     * @return the offset in pixel size
+     */
+    public final int getPanelOffset() {
+        if (mState == STATE_EXPANDED) {
+            return mMinOffset;
+        } else if (mState == STATE_ANCHOR) {
+            return mAnchorOffset;
+        } else if (mHideable && mState == STATE_HIDDEN) {
+            return mParentHeight;
+        }
+        return mMaxOffset;
+    }
+
+    /**
+     * Get the size in pixels from the anchor state to the top of the parent (Expanded state)
+     *
+     * @return pixel size of the anchor state
+     */
+    public int getAnchorOffset() {
+        return mAnchorOffset;
+    }
+
+    /**
+     * The multiplier between 0..1 to calculate the Anchor offset
+     *
+     * @return float between 0..1
+     */
+    public float getAnchorThreshold() {
+        return mAnchorThreshold;
+    }
+
+    /**
+     * Set the offset for the anchor state. Number between 0..1
+     * i.e: Anchor the panel at 1/3 of the screen: setAnchorOffset(0.25)
+     *
+     * @param threshold {@link Float} from 0..1
+     */
+    public void setAnchorOffset(float threshold) {
+        this.mAnchorThreshold = threshold;
+        this.mAnchorOffset = (int) Math.max(mParentHeight * mAnchorThreshold, mMinOffset);
     }
 
     /**
