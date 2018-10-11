@@ -1,15 +1,14 @@
 apply plugin: 'com.android.application'
 
 android {
-    compileSdkVersion 27
-    buildToolsVersion "27.1.1"
+    compileSdkVersion 28
 
     defaultConfig {
-        applicationId "com.hardsoftstudio.anchorbottomsheet"
+        applicationId 'com.hardsoftstudio.anchorbottomsheet'
         minSdkVersion 16
-        targetSdkVersion 27
+        targetSdkVersion 28
         versionCode 1
-        versionName "1.0"
+        versionName '1.0'
     }
     buildTypes {
         release {
@@ -21,5 +20,5 @@ android {
 
 dependencies {
     implementation project(':library')
-    implementation 'com.android.support:appcompat-v7:27.1.1'
+    implementation 'androidx.appcompat:appcompat:1.0.0'
 }
