@@ -1,5 +1,7 @@
+> **Disclaimer:** This library is no longer maintained use at your own risk.
+
 # AnchorSheetBehavior
-[![](https://jitpack.io/v/skimarxall/AnchorSheetBehavior.svg)](https://jitpack.io/#skimarxall/AnchorSheetBehavior)
+[![](https://jitpack.io/v/marcelpinto/AnchorSheetBehavior.svg)](https://jitpack.io/#marcelpinto/AnchorSheetBehavior)
 
 
 Modification of the BottomSheetBehavior with Anchor state.
@@ -21,7 +23,7 @@ allprojects {
 Add AnchorSheetBehavior dependency:
 ```groovy
 dependencies {
-    compile 'com.github.skimarxall:AnchorSheetBehavior:master-SNAPSHOT'
+    compile 'com.github.marcelpinto:AnchorSheetBehavior:master-SNAPSHOT'
 }
 ```
 
